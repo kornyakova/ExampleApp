@@ -1,21 +1,11 @@
 package com.example.demo.controller;
 
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.net.http.HttpResponse.BodyHandlers;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
@@ -26,72 +16,57 @@ import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import com.example.demo.GlobalProperties;
+import com.example.demo.consumer.Consumer;
 import com.example.demo.dao.ArticleRepository;
-import com.example.demo.model.Article;
+import com.example.demo.thread.MyThread;
 import com.example.demo.db.Articles;
-import com.example.service.ArticleService;
-import com.google.gson.Gson;
+import com.example.demo.queue.ArticleQueue;
 
 @Controller
 public class ArticleController {
 	
 	@Autowired
 	ArticleRepository repo;
-	public static Map<String, List<Article>> articlesByNewsSite  = new HashMap<String, List<Article>>();
-	private final static Gson GSON = new Gson();
-
 	private GlobalProperties global;
-	
+
+	private AtomicBoolean stop = new AtomicBoolean(false);
+
+
 	 @Autowired
 	 public void setGlobal(GlobalProperties global) {
 		 this.global = global;
 	 }
 	
 	@RequestMapping("/")
-	public String home() {	
-		loadArticles();		
+	public String home() throws InterruptedException, ExecutionException {	
+		loadArticles();
 		return "home.jsp";		
 	}
 	
 	public void loadArticles() {
-		HttpClient client = HttpClient.newHttpClient();
-		UriComponents uri = UriComponentsBuilder
-                .fromHttpUrl(global.getUrl())
-                .buildAndExpand(global.getLimitForArticles(), "0");
+		int numberOfTasks = global.getThreadPool();
+        ExecutorService executor= Executors.newFixedThreadPool(global.getThreadPool());
 
-		String urlString = uri.toUriString();
-		HttpRequest request = HttpRequest.newBuilder()
-		      .uri(URI.create(urlString))
-		      .build();
-		HttpResponse<String> response = null;
-		
-		try {
-			response = client.send(request, BodyHandlers.ofString());
-		} catch (IOException | InterruptedException e) {
-			e.printStackTrace();
-		}
-		final Article[] articles = GSON.fromJson(response.body(), Article[].class);
-		Map<String, List<Article>> articlesBySite = Stream.of(articles)
-                .filter(article -> !containsAny(article.getTitle(), global.getBlackWords()))
-                .sorted((a1, a2) -> a1.getPublishedDate().compareTo(a2.getPublishedDate()))
-                .collect(Collectors.groupingBy(Article::getNewsSite));
-		
-		articlesByNewsSite = Stream.of(articlesByNewsSite, articlesBySite)
-                .flatMap(map -> map.entrySet().stream())
-                .collect(
-                        Collectors.toMap(
-                                Map.Entry::getKey,
-                                Map.Entry::getValue,
-                                (strings, strings2) -> {
-                                    List<Article> newList = new ArrayList<>();
-                                    newList.addAll(strings);
-                                    newList.addAll(strings2);
-                                    return newList;
-                                }
-                        )
-                );
-		ArticleService articleService = new ArticleService(repo);
-		articleService.saveAll(articlesByNewsSite);
+		ArticleQueue dataQueue = new ArticleQueue(global.getLimitForArticles());
+
+		Consumer consumer = new Consumer(dataQueue, stop);
+		consumer.setBlackWords(global.getBlackWords());
+		consumer.setRepo(repo);
+		Thread consumerThread = new Thread(consumer);
+		consumerThread.start();
+        try{
+            for (int i = 0; i < numberOfTasks; i++){
+            	int skipped_articles = i * global.getCountOfArticlesForOneThread();
+    			UriComponents uri = UriComponentsBuilder
+    	                .fromHttpUrl(global.getUrl())
+    	                .buildAndExpand(global.getCountOfArticlesForOneThread(), skipped_articles);
+    			String urlString = uri.toUriString();
+                executor.execute(new MyThread(urlString, dataQueue));                
+            }
+        }catch(Exception err){
+            err.printStackTrace();
+        }
+        executor.shutdown();
 	}
 	
 	public static boolean containsAny(String str, ArrayList<String> names){
@@ -101,23 +76,13 @@ public class ArticleController {
 	        if (found) {result = found; break;}
 	     }
 	     return result;
-	  }
+	}
 	
 	@RequestMapping("/getArticles")
 	public ModelAndView getArticles() throws InterruptedException, ExecutionException {	
 		ModelAndView mv = new ModelAndView("showArticles.jsp");
-		Executor taskExecutor = Executors.newFixedThreadPool(global.getThreadPool());
-		CompletableFuture<Void> runAsync = CompletableFuture.runAsync(new Runnable() {
-
-			@Override
-			public void run() {
-				List<Articles> articles = repo.findAll();
-				mv.addObject("articles", articles);			
-			}
-			
-		}, taskExecutor);
-		
-		runAsync.get();
+		List<Articles> articles = repo.findAll();
+		mv.addObject("articles", articles);
 		return mv;
 	}
 	
@@ -133,18 +98,8 @@ public class ArticleController {
 	@RequestMapping("/getArticleByNewsSite")
 	public ModelAndView getArticleByNewsSite(@RequestParam String news_site) throws InterruptedException, ExecutionException {
 		ModelAndView mv = new ModelAndView("showArticles.jsp");
-		Executor taskExecutor = Executors.newFixedThreadPool(global.getThreadPool());
-		CompletableFuture<Void> runAsync = CompletableFuture.runAsync(new Runnable() {
-
-			@Override
-			public void run() {
-				List<Articles> articles = repo.findByNewsSite(news_site);
-				mv.addObject("articles", articles);			
-			}
-			
-		}, taskExecutor);
-		
-		runAsync.get();
+		List<Articles> articles = repo.findByNewsSite(news_site);
+		mv.addObject("articles", articles);	
 		return mv;
 	}
 

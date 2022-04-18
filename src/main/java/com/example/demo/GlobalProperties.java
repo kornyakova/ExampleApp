@@ -11,6 +11,7 @@ public class GlobalProperties {
 	private Integer threadPool;
 	private Integer limitForArticles;
 	private String url;
+	private Integer countOfArticlesForOneThread;
     private ArrayList<String> blackWords = new ArrayList<>();
     
 	public Integer getThreadPool() {
@@ -36,5 +37,12 @@ public class GlobalProperties {
 	}
 	public void setUrl(String url) {
 		this.url = url;
+	}
+	public Integer getCountOfArticlesForOneThread() {
+		return countOfArticlesForOneThread;
+	}
+	public void setCountOfArticlesForOneThread(Integer countOfArticlesForOneThread) {
+		this.countOfArticlesForOneThread = countOfArticlesForOneThread;
 	}	
+	
 }

@@ -10,6 +10,6 @@ import com.example.demo.db.Articles;
 @Repository
 public interface ArticleRepository extends JpaRepository<Articles, Integer>{
 
-	List<Articles> findByNewsSite(String news_site);	
+	List<Articles> findByNewsSite(String news_site);
 
 }
